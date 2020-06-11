@@ -36,31 +36,27 @@ inline void compute_v(int64_t size, double* data_a, double* data_b, double* data
        //   + (ad)a + (ad)b + (ad)c + (ad)d   -- 8  t4                                   
 
        auto aa = svmul_f64_z(svptrue_b64(), a, a);
-       auto ab = svmul_f64_z(svptrue_b64(), a, b);
-       auto ac = svmul_f64_z(svptrue_b64(), a, c);
        auto ad = svmul_f64_z(svptrue_b64(), a, d);
-       auto bb = svmul_f64_z(svptrue_b64(), b, b);
        auto bc = svmul_f64_z(svptrue_b64(), b, c);
-       auto bd = svmul_f64_z(svptrue_b64(), b, d);
        auto cc = svmul_f64_z(svptrue_b64(), c, c);
-       auto cd = svmul_f64_z(svptrue_b64(), c, d);
-       auto dd = svmul_f64_z(svptrue_b64(), d, d);  // 10 flops
+       auto dd = svmul_f64_z(svptrue_b64(), d, d);  // 5 flops
        
-       auto t0 = svadd_f64_z(svptrue_b64(), aa, ab); 
-       auto t1 = svadd_f64_z(svptrue_b64(), ac, ad);
-       auto t2 = svadd_f64_z(svptrue_b64(), bb, bc);
-       auto t3 = svadd_f64_z(svptrue_b64(), bd, cc);
-       auto t4 = svadd_f64_z(svptrue_b64(), cd, dd); // 5 flops
+       auto t0 = svmad_f64_z(svptrue_b64(), a, b, aa); 
+       auto t1 = svmad_f64_z(svptrue_b64(), a, c, ad);
+       auto t2 = svmad_f64_z(svptrue_b64(), b, b, bc);
+       auto t3 = svmad_f64_z(svptrue_b64(), b, d, cc);
+       auto t4 = svmad_f64_z(svptrue_b64(), c, d, dd); // 10 flops
 
        t0 = svmad_f64_z(svptrue_b64(), aa, a, t0);
        t0 = svmad_f64_z(svptrue_b64(), aa, b, t0);
        t0 = svmad_f64_z(svptrue_b64(), aa, c, t0);
        t0 = svmad_f64_z(svptrue_b64(), aa, d, t0);   // 8 flops
 
+       auto bb = svmul_f64_z(svptrue_b64(), b, b);
        t1 = svmad_f64_z(svptrue_b64(), bb, a, t1);
        t1 = svmad_f64_z(svptrue_b64(), bb, b, t1);
        t1 = svmad_f64_z(svptrue_b64(), bb, c, t1);
-       t1 = svmad_f64_z(svptrue_b64(), bb, d, t1);  // 8 flops
+       t1 = svmad_f64_z(svptrue_b64(), bb, d, t1);  // 9 flops
 
        t2 = svmad_f64_z(svptrue_b64(), cc, a, t2);
        t2 = svmad_f64_z(svptrue_b64(), cc, b, t2);
@@ -72,26 +68,30 @@ inline void compute_v(int64_t size, double* data_a, double* data_b, double* data
        t3 = svmad_f64_z(svptrue_b64(), dd, c, t3);
        t3 = svmad_f64_z(svptrue_b64(), dd, d, t3);  // 8 flops
 
+       auto ab = svmul_f64_z(svptrue_b64(), a, b);
        t4 = svmad_f64_z(svptrue_b64(), ab, a, t4);
        t4 = svmad_f64_z(svptrue_b64(), ab, b, t4);
        t4 = svmad_f64_z(svptrue_b64(), ab, c, t4);
-       t4 = svmad_f64_z(svptrue_b64(), ab, d, t4);  // 8 flops
+       t4 = svmad_f64_z(svptrue_b64(), ab, d, t4);  // 9 flops
 
        t0 = svmad_f64_z(svptrue_b64(), bc, a, t0);
        t0 = svmad_f64_z(svptrue_b64(), bc, b, t0);
        t0 = svmad_f64_z(svptrue_b64(), bc, c, t0);
        t0 = svmad_f64_z(svptrue_b64(), bc, d, t0);  // 8 flops
 
+       auto cd = svmul_f64_z(svptrue_b64(), c, d);
        t1 = svmad_f64_z(svptrue_b64(), cd, a, t1);
        t1 = svmad_f64_z(svptrue_b64(), cd, b, t1);
        t1 = svmad_f64_z(svptrue_b64(), cd, c, t1);
-       t1 = svmad_f64_z(svptrue_b64(), cd, d, t1);  // 8 flops
+       t1 = svmad_f64_z(svptrue_b64(), cd, d, t1);  // 9 flops
 
+       auto ac = svmul_f64_z(svptrue_b64(), a, c);
        t2 = svmad_f64_z(svptrue_b64(), ac, a, t2);
        t2 = svmad_f64_z(svptrue_b64(), ac, b, t2);
        t2 = svmad_f64_z(svptrue_b64(), ac, c, t2);
-       t2 = svmad_f64_z(svptrue_b64(), ac, d, t2);  // 8 flops
+       t2 = svmad_f64_z(svptrue_b64(), ac, d, t2);  // 9 flops
 
+       auto bd = svmul_f64_z(svptrue_b64(), b, d);
        t3 = svmad_f64_z(svptrue_b64(), bd, a, t3);
        t3 = svmad_f64_z(svptrue_b64(), bd, b, t3);
        t3 = svmad_f64_z(svptrue_b64(), bd, c, t3);
@@ -107,8 +107,7 @@ inline void compute_v(int64_t size, double* data_a, double* data_b, double* data
        t0 = svadd_f64_z(svptrue_b64(), t0, t1);
        t0 = svadd_f64_z(svptrue_b64(), t0, t3);     // 4 flops
 
-       //-----------------------------    99 flops
-       
+       //-----------------------------    104 flops
        svst1_f64(svptrue_b64(), data_d+i, t0);
     }
 }
