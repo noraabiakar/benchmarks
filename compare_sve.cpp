@@ -6,147 +6,2581 @@
 #include <algorithm>
 #include <numeric>
 #include <sys/prctl.h>
+#include <unistd.h>
 #include <arm_sve.h>
  
 using cclock = std::chrono::high_resolution_clock;
 
-inline void compute_v(int64_t size, double* data_a, double* data_b, double* data_c, double* data_d)
+inline void flop_0(int64_t size, double* data_a) // 2 flops - 8 bytes = 1/4 flops/byte 
 {
+    auto pg    = svptrue_b64();
+    auto three = svdup_n_f64(3.0);
+    auto two   = svdup_n_f64(2.0);
+
     for (unsigned i = 0; i < size; i+=8) {
-       auto a = svld1_f64(svptrue_b64(),data_a+i);
-       auto b = svld1_f64(svptrue_b64(),data_b+i);
-       auto c = svld1_f64(svptrue_b64(),data_c+i);
-       auto d = svld1_f64(svptrue_b64(),data_d+i);
-
-       // fmadd: res = (a * b) + c
-       // t = (a)a + (a)b                     -- 3  t0
-       //   + (a)c + (a)d                     -- 4  t1
-       //   + (b)b + (b)c                     -- 4  t2   
-       //   + (b)d + (c)c                     -- 4  t3
-       //   + (c)d + (d)d                     -- 4  t4
-       //   + (aa)a + (aa)b + (aa)c + (aa)d   -- 8  t0
-       //   + (bb)a + (bb)b + (bb)c + (bb)d   -- 8  t1
-       //   + (cc)a + (cc)b + (cc)c + (cc)d   -- 8  t2
-       //   + (dd)a + (dd)b + (dd)c + (dd)d   -- 8  t3
-       //   + (ab)a + (ab)b + (ab)c + (ab)d   -- 8  t4
-       //   + (bc)a + (bc)b + (bc)c + (bc)d   -- 8  t0
-       //   + (cd)a + (cd)b + (cd)c + (cd)d   -- 8  t1
-       //   + (ac)a + (ac)b + (ac)c + (ac)d   -- 8  t2                                  
-       //   + (bd)a + (db)b + (db)c + (db)d   -- 8  t3                                   
-       //   + (ad)a + (ad)b + (ad)c + (ad)d   -- 8  t4                                   
-
-       auto aa = svmul_f64_z(svptrue_b64(), a, a);
-       auto ad = svmul_f64_z(svptrue_b64(), a, d);
-       auto bc = svmul_f64_z(svptrue_b64(), b, c);
-       auto cc = svmul_f64_z(svptrue_b64(), c, c);
-       auto dd = svmul_f64_z(svptrue_b64(), d, d);  // 5 flops
-       
-       auto t0 = svmad_f64_z(svptrue_b64(), a, b, aa); 
-       auto t1 = svmad_f64_z(svptrue_b64(), a, c, ad);
-       auto t2 = svmad_f64_z(svptrue_b64(), b, b, bc);
-       auto t3 = svmad_f64_z(svptrue_b64(), b, d, cc);
-       auto t4 = svmad_f64_z(svptrue_b64(), c, d, dd); // 10 flops
-
-       t0 = svmad_f64_z(svptrue_b64(), aa, a, t0);
-       t0 = svmad_f64_z(svptrue_b64(), aa, b, t0);
-       t0 = svmad_f64_z(svptrue_b64(), aa, c, t0);
-       t0 = svmad_f64_z(svptrue_b64(), aa, d, t0);   // 8 flops
-
-       auto bb = svmul_f64_z(svptrue_b64(), b, b);
-       t1 = svmad_f64_z(svptrue_b64(), bb, a, t1);
-       t1 = svmad_f64_z(svptrue_b64(), bb, b, t1);
-       t1 = svmad_f64_z(svptrue_b64(), bb, c, t1);
-       t1 = svmad_f64_z(svptrue_b64(), bb, d, t1);  // 9 flops
-
-       t2 = svmad_f64_z(svptrue_b64(), cc, a, t2);
-       t2 = svmad_f64_z(svptrue_b64(), cc, b, t2);
-       t2 = svmad_f64_z(svptrue_b64(), cc, c, t2);
-       t2 = svmad_f64_z(svptrue_b64(), cc, d, t2);  // 8 flops
-
-       t3 = svmad_f64_z(svptrue_b64(), dd, a, t3);
-       t3 = svmad_f64_z(svptrue_b64(), dd, b, t3);
-       t3 = svmad_f64_z(svptrue_b64(), dd, c, t3);
-       t3 = svmad_f64_z(svptrue_b64(), dd, d, t3);  // 8 flops
-
-       auto ab = svmul_f64_z(svptrue_b64(), a, b);
-       t4 = svmad_f64_z(svptrue_b64(), ab, a, t4);
-       t4 = svmad_f64_z(svptrue_b64(), ab, b, t4);
-       t4 = svmad_f64_z(svptrue_b64(), ab, c, t4);
-       t4 = svmad_f64_z(svptrue_b64(), ab, d, t4);  // 9 flops
-
-       t0 = svmad_f64_z(svptrue_b64(), bc, a, t0);
-       t0 = svmad_f64_z(svptrue_b64(), bc, b, t0);
-       t0 = svmad_f64_z(svptrue_b64(), bc, c, t0);
-       t0 = svmad_f64_z(svptrue_b64(), bc, d, t0);  // 8 flops
-
-       auto cd = svmul_f64_z(svptrue_b64(), c, d);
-       t1 = svmad_f64_z(svptrue_b64(), cd, a, t1);
-       t1 = svmad_f64_z(svptrue_b64(), cd, b, t1);
-       t1 = svmad_f64_z(svptrue_b64(), cd, c, t1);
-       t1 = svmad_f64_z(svptrue_b64(), cd, d, t1);  // 9 flops
-
-       auto ac = svmul_f64_z(svptrue_b64(), a, c);
-       t2 = svmad_f64_z(svptrue_b64(), ac, a, t2);
-       t2 = svmad_f64_z(svptrue_b64(), ac, b, t2);
-       t2 = svmad_f64_z(svptrue_b64(), ac, c, t2);
-       t2 = svmad_f64_z(svptrue_b64(), ac, d, t2);  // 9 flops
-
-       auto bd = svmul_f64_z(svptrue_b64(), b, d);
-       t3 = svmad_f64_z(svptrue_b64(), bd, a, t3);
-       t3 = svmad_f64_z(svptrue_b64(), bd, b, t3);
-       t3 = svmad_f64_z(svptrue_b64(), bd, c, t3);
-       t3 = svmad_f64_z(svptrue_b64(), bd, d, t3);  // 8 flops
-
-       t4 = svmad_f64_z(svptrue_b64(), ad, a, t4);
-       t4 = svmad_f64_z(svptrue_b64(), ad, b, t4);
-       t4 = svmad_f64_z(svptrue_b64(), ad, c, t4);
-       t4 = svmad_f64_z(svptrue_b64(), ad, d, t4);  // 8 flops
-
-       t1 = svadd_f64_z(svptrue_b64(), t1, t2);
-       t3 = svadd_f64_z(svptrue_b64(), t3, t4);
-       t0 = svadd_f64_z(svptrue_b64(), t0, t1);
-       t0 = svadd_f64_z(svptrue_b64(), t0, t3);     // 4 flops
-
-       //-----------------------------    104 flops
-       svst1_f64(svptrue_b64(), data_d+i, t0);
+       auto a = svld1_f64(pg, data_a+i);
+       auto t0 = svmad_f64_z(pg, three, a, two);
+       svst1_f64(pg,  data_a+i, t0);
     }
+}
+
+inline void flop_1(int64_t size, double* data_a) // 5 flops - 8 bytes = 5/8 flops/byte 
+{
+    auto pg    = svptrue_b64();
+    auto three = svdup_n_f64(3.0);
+    auto two   = svdup_n_f64(2.0);
+    auto seven = svdup_n_f64(7.0);
+    auto one   = svdup_n_f64(1.3);
+
+    for (unsigned i = 0; i < size; i+=8) {
+       auto a = svld1_f64(pg, data_a+i);
+
+       auto t0 = svmad_f64_z(pg, three, a, two);
+       auto t1 = svmad_f64_z(pg, seven, a, one);
+       t0 = svadd_f64_z(pg, t0, t1);
+
+       svst1_f64(pg,  data_a+i, t0);
+    }
+}
+
+inline void flop_2(int64_t size, double* data_a) // 11 flops - 8 bytes = 11/8 flops/byte 
+{
+    auto pg    = svptrue_b64();
+    auto three = svdup_n_f64(3.0);
+    auto two   = svdup_n_f64(2.0);
+    auto seven = svdup_n_f64(7.0);
+    auto one   = svdup_n_f64(1.3);
+
+    for (unsigned i = 0; i < size; i+=8) {
+       auto a = svld1_f64(pg, data_a+i);
+
+       auto t0 = svmad_f64_z(pg, three, a, two);
+       auto t1 = svmad_f64_z(pg, seven, a, one);
+       auto t2 = svmad_f64_z(pg, two, a, three);
+       auto t3 = svmad_f64_z(pg, one, a, seven);
+
+       t0 = svadd_f64_z(pg, t0, t1);
+       t2 = svadd_f64_z(pg, t2, t3);
+       t0 = svadd_f64_z(pg, t0, t2);
+
+       svst1_f64(pg,  data_a+i, t0);
+    }
+}
+
+inline void flop_3(int64_t size, double* data_a) // 17 flops - 8 bytes = 2 flops/byte 
+{
+    auto pg    = svptrue_b64();
+    auto three = svdup_n_f64(3.0);
+    auto two   = svdup_n_f64(2.0);
+    auto seven = svdup_n_f64(7.0);
+    auto one   = svdup_n_f64(1.3);
+
+    for (unsigned i = 0; i < size; i+=8) {
+       auto a = svld1_f64(pg, data_a+i);
+
+       auto t0 = svmad_f64_z(pg, three, a, two);
+       auto t1 = svmad_f64_z(pg, seven, a, one);
+       auto t2 = svmad_f64_z(pg, two, a, three);
+       auto t3 = svmad_f64_z(pg, one, a, seven);
+       auto t4 = svmad_f64_z(pg, one, a, three);
+       auto t5 = svmad_f64_z(pg, two, a, seven);
+
+       t0 = svadd_f64_z(pg, t0, t1);
+       t2 = svadd_f64_z(pg, t2, t3);
+       t4 = svadd_f64_z(pg, t4, t5);
+       t0 = svadd_f64_z(pg, t0, t2);
+       t0 = svadd_f64_z(pg, t0, t4);
+
+       svst1_f64(pg,  data_a+i, t0);
+    }
+}
+
+inline void flop_4(int64_t size, double* data_a) // 35 flops - 8 bytes = 4.4 flops/byte 
+{
+    auto pg    = svptrue_b64();
+    auto three = svdup_n_f64(3.0);
+    auto two   = svdup_n_f64(2.0);
+    auto seven = svdup_n_f64(7.0);
+    auto one   = svdup_n_f64(1.3);
+
+    for (unsigned i = 0; i < size; i+=8) {
+       auto a = svld1_f64(pg, data_a+i);
+
+       auto t0 = svmad_f64_z(pg, three, a, two);
+       auto t1 = svmad_f64_z(pg, seven, a, one);
+       auto t2 = svmad_f64_z(pg, two, a, three);
+       auto t3 = svmad_f64_z(pg, one, a, seven);
+       auto t4 = svmad_f64_z(pg, one, a, three);
+       auto t5 = svmad_f64_z(pg, two, a, seven);
+       auto t6 = svmad_f64_z(pg, one, a, two);
+       auto t7 = svmad_f64_z(pg, three, a, seven);
+       auto t8 = svmad_f64_z(pg, three, a, one);
+
+       t0 = svmad_f64_z(pg, t3, t4, t0); 
+       t1 = svmad_f64_z(pg, t5, t6, t1); 
+       t2 = svmad_f64_z(pg, t7, t8, t2); 
+       t3 = svmad_f64_z(pg, t5, t4, t3); 
+       t4 = svmad_f64_z(pg, t7, t6, t4); 
+       t5 = svmad_f64_z(pg, t8, t6, t5); 
+
+       t0 = svadd_f64_z(pg, t0, t1);
+       t2 = svadd_f64_z(pg, t2, t3);
+       t4 = svadd_f64_z(pg, t4, t5);
+       t0 = svadd_f64_z(pg, t0, t2);
+       t0 = svadd_f64_z(pg, t0, t4);
+
+       svst1_f64(pg,  data_a+i, t0);
+    }
+}
+
+inline void flop_5(int64_t size, double* data_a) // 62 flops - 8 bytes = 7.75 flops/byte 
+{
+    auto pg    = svptrue_b64();
+    auto three = svdup_n_f64(3.0);
+    auto two   = svdup_n_f64(2.0);
+    auto seven = svdup_n_f64(7.0);
+    auto one   = svdup_n_f64(1.3);
+
+    for (unsigned i = 0; i < size; i+=8) {
+       auto a = svld1_f64(pg, data_a+i);
+
+       auto t0 = svmad_f64_z(pg, three, a, two);
+       auto t1 = svmad_f64_z(pg, seven, a, one);
+       auto t2 = svmad_f64_z(pg, two, a, three);
+       auto t3 = svmad_f64_z(pg, one, a, seven);
+       auto t4 = svmad_f64_z(pg, one, a, three);
+       auto t5 = svmad_f64_z(pg, two, a, seven);
+       auto t6 = svmad_f64_z(pg, one, a, two);
+       auto t7 = svmad_f64_z(pg, three, a, seven);
+       auto t8 = svmad_f64_z(pg, three, a, one);
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       // REDUCE
+       t0 = svmad_f64_z(pg, t3, t4, t0); 
+       t1 = svmad_f64_z(pg, t5, t6, t1); 
+       t2 = svmad_f64_z(pg, t7, t8, t2); 
+
+       t0 = svadd_f64_z(pg, t0, t1);
+       t0 = svadd_f64_z(pg, t0, t2);
+
+       svst1_f64(pg,  data_a+i, t0);
+    }
+}
+
+inline void flop_6(int64_t size, double* data_a) // 116 flops - 8 bytes = 14.5 flops/byte 
+{
+    auto pg    = svptrue_b64();
+    auto three = svdup_n_f64(3.0);
+    auto two   = svdup_n_f64(2.0);
+    auto seven = svdup_n_f64(7.0);
+    auto one   = svdup_n_f64(1.3);
+
+    for (unsigned i = 0; i < size; i+=8) {
+       auto a = svld1_f64(pg, data_a+i);
+
+       auto t0 = svmad_f64_z(pg, three, a, two);
+       auto t1 = svmad_f64_z(pg, seven, a, one);
+       auto t2 = svmad_f64_z(pg, two, a, three);
+       auto t3 = svmad_f64_z(pg, one, a, seven);
+       auto t4 = svmad_f64_z(pg, one, a, three);
+       auto t5 = svmad_f64_z(pg, two, a, seven);
+       auto t6 = svmad_f64_z(pg, one, a, two);
+       auto t7 = svmad_f64_z(pg, three, a, seven);
+       auto t8 = svmad_f64_z(pg, three, a, one);
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+
+       // REDUCE
+       t0 = svmad_f64_z(pg, t3, t4, t0); 
+       t1 = svmad_f64_z(pg, t5, t6, t1); 
+       t2 = svmad_f64_z(pg, t7, t8, t2); 
+
+       t0 = svadd_f64_z(pg, t0, t1);
+       t0 = svadd_f64_z(pg, t0, t2);
+
+       svst1_f64(pg,  data_a+i, t0);
+    }
+}
+
+inline void flop_7(int64_t size, double* data_a) // 242 flops - 8 bytes = 30.25 flops/byte 
+{
+    auto pg    = svptrue_b64();
+    auto three = svdup_n_f64(3.0);
+    auto two   = svdup_n_f64(2.0);
+    auto seven = svdup_n_f64(7.0);
+    auto one   = svdup_n_f64(1.3);
+
+    for (unsigned i = 0; i < size; i+=8) {
+       auto a = svld1_f64(pg, data_a+i);
+
+       auto t0 = svmad_f64_z(pg, three, a, two);
+       auto t1 = svmad_f64_z(pg, seven, a, one);
+       auto t2 = svmad_f64_z(pg, two, a, three);
+       auto t3 = svmad_f64_z(pg, one, a, seven);
+       auto t4 = svmad_f64_z(pg, one, a, three);
+       auto t5 = svmad_f64_z(pg, two, a, seven);
+       auto t6 = svmad_f64_z(pg, one, a, two);
+       auto t7 = svmad_f64_z(pg, three, a, seven);
+       auto t8 = svmad_f64_z(pg, three, a, one);
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       // REDUCE
+       t0 = svmad_f64_z(pg, t3, t4, t0); 
+       t1 = svmad_f64_z(pg, t5, t6, t1); 
+       t2 = svmad_f64_z(pg, t7, t8, t2); 
+
+       t0 = svadd_f64_z(pg, t0, t1);
+       t0 = svadd_f64_z(pg, t0, t2);
+
+       svst1_f64(pg,  data_a+i, t0);
+    }
+}
+
+inline void flop_8(int64_t size, double* data_a) // 512 flops - 8 bytes = 64 flops/byte 
+{
+    auto pg    = svptrue_b64();
+    auto three = svdup_n_f64(3.0);
+    auto two   = svdup_n_f64(2.0);
+    auto seven = svdup_n_f64(7.0);
+    auto one   = svdup_n_f64(1.3);
+
+    for (unsigned i = 0; i < size; i+=8) {
+       auto a = svld1_f64(pg, data_a+i);
+
+       auto t0 = svmad_f64_z(pg, three, a, two);
+       auto t1 = svmad_f64_z(pg, seven, a, one);
+       auto t2 = svmad_f64_z(pg, two, a, three);
+       auto t3 = svmad_f64_z(pg, one, a, seven);
+       auto t4 = svmad_f64_z(pg, one, a, three);
+       auto t5 = svmad_f64_z(pg, two, a, seven);
+       auto t6 = svmad_f64_z(pg, one, a, two);
+       auto t7 = svmad_f64_z(pg, three, a, seven);
+       auto t8 = svmad_f64_z(pg, three, a, one);
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+
+       // REDUCE
+       t0 = svmad_f64_z(pg, t3, t4, t0); 
+       t1 = svmad_f64_z(pg, t5, t6, t1); 
+       t2 = svmad_f64_z(pg, t7, t8, t2); 
+
+       t0 = svadd_f64_z(pg, t0, t1);
+       t0 = svadd_f64_z(pg, t0, t2);
+
+       svst1_f64(pg,  data_a+i, t0);
+    }
+}
+
+inline void flop_9(int64_t size, double* data_a) // 1034 flops - 8 bytes = 129.25 flops/byte 
+{
+    auto pg    = svptrue_b64();
+    auto three = svdup_n_f64(3.0);
+    auto two   = svdup_n_f64(2.0);
+    auto seven = svdup_n_f64(7.0);
+    auto one   = svdup_n_f64(1.3);
+
+    for (unsigned i = 0; i < size; i+=8) {
+       auto a = svld1_f64(pg, data_a+i);
+
+       auto t0 = svmad_f64_z(pg, three, a, two);
+       auto t1 = svmad_f64_z(pg, seven, a, one);
+       auto t2 = svmad_f64_z(pg, two, a, three);
+       auto t3 = svmad_f64_z(pg, one, a, seven);
+       auto t4 = svmad_f64_z(pg, one, a, three);
+       auto t5 = svmad_f64_z(pg, two, a, seven);
+       auto t6 = svmad_f64_z(pg, one, a, two);
+       auto t7 = svmad_f64_z(pg, three, a, seven);
+       auto t8 = svmad_f64_z(pg, three, a, one);
+ 
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       // REDUCE
+       t0 = svmad_f64_z(pg, t3, t4, t0); 
+       t1 = svmad_f64_z(pg, t5, t6, t1); 
+       t2 = svmad_f64_z(pg, t7, t8, t2); 
+
+       t0 = svadd_f64_z(pg, t0, t1);
+       t0 = svadd_f64_z(pg, t0, t2);
+
+       svst1_f64(pg,  data_a+i, t0);
+    }
+}
+
+inline void flop_10(int64_t size, double* data_a) //2168 flops - 8 bytes = 271 flops/byte 
+{
+    auto pg    = svptrue_b64();
+    auto three = svdup_n_f64(3.0);
+    auto two   = svdup_n_f64(2.0);
+    auto seven = svdup_n_f64(7.0);
+    auto one   = svdup_n_f64(1.3);
+
+    for (unsigned i = 0; i < size; i+=8) {
+       auto a = svld1_f64(pg, data_a+i);
+
+       auto t0 = svmad_f64_z(pg, three, a, two);
+       auto t1 = svmad_f64_z(pg, seven, a, one);
+       auto t2 = svmad_f64_z(pg, two, a, three);
+       auto t3 = svmad_f64_z(pg, one, a, seven);
+       auto t4 = svmad_f64_z(pg, one, a, three);
+       auto t5 = svmad_f64_z(pg, two, a, seven);
+       auto t6 = svmad_f64_z(pg, one, a, two);
+       auto t7 = svmad_f64_z(pg, three, a, seven);
+       auto t8 = svmad_f64_z(pg, three, a, one);
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8);   // 10 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8);  // 20
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8);  // 30
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8);  // 40
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8);  // 50
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+ 
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8);  // 60 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8);  // 70
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8);  // 80
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8);  // 90
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); // 100
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8);  // 110 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8); 
+
+       t0 = svmad_f64_z(pg, t3,    t4, t0); 
+       t1 = svmad_f64_z(pg, t5,    t6, t1); 
+       t2 = svmad_f64_z(pg, t7,    t8, t2); 
+       t3 = svmad_f64_z(pg, t5,    t4, t3); 
+       t4 = svmad_f64_z(pg, t7,    t6, t4); 
+       t5 = svmad_f64_z(pg, t8,    t6, t5); 
+       t6 = svmad_f64_z(pg, three, t7, t6); 
+       t7 = svmad_f64_z(pg, one,   t8, t7); 
+       t8 = svmad_f64_z(pg, two,   t8, t8);  // 120 
+
+       // REDUCE
+       t0 = svmad_f64_z(pg, t3, t4, t0); 
+       t1 = svmad_f64_z(pg, t5, t6, t1); 
+       t2 = svmad_f64_z(pg, t7, t8, t2); 
+
+       t0 = svadd_f64_z(pg, t0, t1);
+       t0 = svadd_f64_z(pg, t0, t2);
+
+       svst1_f64(pg,  data_a+i, t0);
+    }
+}
+
+template <typename L>
+void run(L&& fn, double* a, unsigned size) {
+
+    for(uint64_t i = 0; i < size; i++) {
+        a[i] = (double)(i + 1)/(1e20*size);
+    }
+
+    usleep(1000000);  
+
+    auto t0 = cclock::now();
+    fn(size, a);
+    auto t1 = cclock::now();
+    auto count = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+
+    std::cout<< count << std::endl;
 }
 
 int main(int argc, char **argv) {
     unsigned SIZE = std::atoi(argv[1]);
     unsigned N    = std::atoi(argv[2]);
     std::cout << SIZE << " x " << N << std::endl;
-    double *a, *b, *c, *out;
+    double *a;
 
     a   = (double *)malloc(sizeof(double) * SIZE);
-    b   = (double *)malloc(sizeof(double) * SIZE);
-    c   = (double *)malloc(sizeof(double) * SIZE);
-    out = (double *)malloc(sizeof(double) * SIZE);
 
-    for(uint64_t i = 0; i < SIZE; i++) {
-        a[i] = (double)(i + 1)/(1e20*SIZE);
-        b[i] = (double)(i + 2)/(1e20*SIZE);
-        c[i] = (double)(i + 3)/(1e20*SIZE);
-        out[i] = (double)(i + 4)/(1e20*SIZE);
-    }
-    
-    double sum = 0;
-    {
-        auto t0 = cclock::now();
-        for (int i = 0; i < N; i++) {
-            compute_v(SIZE, a, b, c, out);
-            sum += out[i%SIZE];
-        }
-        auto t1 = cclock::now();
-        auto count = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-
-        std::cout<<"compute_v takes: \t"<< count << "\t" << sum << std::endl;
-    }
+    run(flop_0, a, SIZE);
+    run(flop_1, a, SIZE);
+    run(flop_2, a, SIZE);
+    run(flop_3, a, SIZE);
+    run(flop_4, a, SIZE);
+    run(flop_5, a, SIZE);
+    run(flop_6, a, SIZE);
+    run(flop_7, a, SIZE);
+    run(flop_8, a, SIZE);
+    run(flop_9, a, SIZE);
+    run(flop_10, a, SIZE);
     
     free(a);
-    free(b);
-    free(c);
-    free(out);
 
     return 0;
 }
