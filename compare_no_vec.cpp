@@ -7,7 +7,6 @@
 #include <numeric>
 #include <sys/prctl.h>
 #include <unistd.h>
-#include <arm_sve.h>
  
 using cclock = std::chrono::high_resolution_clock;
 
