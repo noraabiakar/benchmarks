@@ -12,7 +12,9 @@ export LD_LIBRARY_PATH=${BASEDIR}/lib64:$LD_LIBRARY_PATH
 
 cd ${PJM_O_WORKDIR} # Change directory to the working directory
 
-FCC -Nclang -O3 -funroll-loops -fno-vectorize -march=armv8.2-a+sve compare_sve_no_vec.cpp -o a.out
+#FCC -Nclang -O3 -funroll-loops -fno-vectorize -march=armv8.2-a+sve compare_sve_no_vec_div.cpp -o a.out
+FCC -Nclang -O3 -funroll-loops -march=armv8.2-a+sve compare_sve_no_vec_div.cpp -o a.out
+#FCC -Nclang -O3 -funroll-loops -march=armv8.2-a+sve compare_sve_div.cpp -o a.out
 numactl --physcpubind=12 --membind=4 ./a.out 8000000 1
 numactl --physcpubind=12 --membind=4 ./a.out 8000000 1
 numactl --physcpubind=12 --membind=4 ./a.out 8000000 1
